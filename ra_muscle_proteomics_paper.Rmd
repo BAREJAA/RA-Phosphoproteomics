@@ -1,0 +1,299 @@
+---
+title: "RA Muscle Proteomics Huffman Project"
+author: "Akshay Bareja"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(biomaRt)
+library(limma)
+library(KSEAapp)
+library(kableExtra)
+library(FactoMineR)
+library(factoextra)
+library(pheatmap)
+library(org.Hs.eg.db)
+```
+
+## Import and pre-process data
+
+```{r message = FALSE, warning = FALSE}
+df <- read_excel("data/10128_SupplementalData_061223.xlsx", 
+                  sheet = "Table 5 RA_v_HC") %>% 
+      janitor::clean_names() %>% 
+      dplyr::filter(!is.na(modification_master)) %>% 
+      dplyr::select(accession, sequence, modifications, modification_master, matches("ra_normalized|hc_normalized")) %>%       dplyr::mutate(modification_master = str_replace_all(modification_master, "; S/T", ""),
+                                                                                                                            modification_master = str_replace_all(modification_master, "; S/Y", "")) %>%  # get rid of any occurrences of S/T and S/Y
+      dplyr::mutate(row_id = paste0("row_", 1:nrow(.))) %>%  # create a column with unique row names to keep track of things
+      dplyr::relocate(row_id) %>% 
+      dplyr::mutate(accession_count = str_count(accession, ";"),
+                    modification_count = str_count(modification_master, ";")) %>% 
+      dplyr::mutate(across(ends_with("normalized"), ~log2(.x + 0.00001))) # log2 transform
+```
+
+## PCA
+```{r message = FALSE, warning = FALSE}
+df_pca <- df %>% 
+                      dplyr::select(ends_with("normalized")) %>% 
+                      as.matrix() 
+df_pca <- t(df_pca)
+rownames(df_pca) <- c(rep("RA", 3), rep("HC", 3))
+df_res.pca <- PCA(df_pca,  graph = FALSE)
+
+# Visualize eigenvalues/variances
+fviz_screeplot(df_res.pca, addlabels = TRUE, ylim = c(0, 50))
+
+fviz_pca_ind(df_res.pca, 
+             habillage = as.factor(rownames(df_pca)),
+             repel = TRUE # Avoid text overlapping (slow if many points)
+             )
+```
+
+## Heatmap
+```{r message = FALSE, warning = FALSE}
+df_heatmap <- df %>% 
+                      dplyr::select(ends_with("normalized")) %>% 
+                      as.matrix() 
+
+annotate_df <- data.frame(
+  Group = c(rep("RA", 3), rep("HC", 3))
+)
+rownames(annotate_df) <- colnames(df_heatmap)
+
+pheatmap(df_heatmap,
+         scale = "row",
+         #show_colnames = FALSE,
+         clustering_distance_rows = "correlation",
+         clustering_distance_cols = "correlation",
+         clustering_method = "complete",
+         annotation_col = annotate_df)
+```
+
+## Process data for KSEA
+```{r message = FALSE, warning = FALSE}
+final_df <- df %>% 
+  tidyr::separate_longer_delim(cols = modification_master,
+                               delim = "];") %>% # because you don't want to separate at a semicolon WITHIN square brackets 
+  dplyr::mutate(modification_master = str_trim(modification_master, side = "left")) %>% # clean up whitespace on the left
+  dplyr::mutate(protein_master = word(modification_master)) %>% 
+  dplyr::mutate(protein_master = if_else(str_detect(protein_master, "Phospho"), # because you end up with some values == "1x Phospho" in the protein_master column
+                                         accession, protein_master)) %>% 
+  dplyr::mutate(modification_master = str_replace(modification_master, "\\)$", "\\)\\]")) %>% # adds a `]` to the end of any residues that lost this in a previous code chunk
+  dplyr::mutate(modification_master = str_replace(modification_master, "S$", "S\\]")) %>% # this is for a very specific edge case associated with row_1039
+  dplyr::mutate(Residue.Both = str_extract_all(modification_master, "(?<=\\[).+?(?=\\])")) %>% 
+  dplyr::mutate(Residue.Both = str_replace_all(Residue.Both, "\\(.+?\\)", "")) %>% 
+  dplyr::select(row_id, protein_master, sequence, modifications, matches("ra_normalized|hc_normalized"), Residue.Both) %>% 
+  dplyr::rename(Protein = protein_master,
+                Peptide = sequence) %>% 
+  dplyr::mutate(Residue.Both = str_replace_all(Residue.Both, ";\\s", ";")) %>% # this is important! you cannot have a space after semi-colons
+  dplyr::select(-row_id) %>% 
+  dplyr::select(Protein, Peptide, Residue.Both, modifications, everything()) 
+
+# look up gene symbols
+mart <- useEnsembl("ensembl","hsapiens_gene_ensembl")
+uniprot_symbols <- getBM(attributes = c("uniprotswissprot", "hgnc_symbol"),
+                         filter = "uniprotswissprot",
+                         values = final_df$Protein,
+                         mart)
+
+df_for_limma <- final_df %>%
+                  dplyr::inner_join(uniprot_symbols, join_by(Protein == uniprotswissprot)) %>%
+                  dplyr::rename(Gene = hgnc_symbol) %>% 
+                  dplyr::relocate(Gene, .after = Protein)
+
+#write_csv(uniprot_symbols, "results/uniprot_symbols.csv") # last saved on 01/07/2025
+#write_csv(df_for_limma, "results/df_for_limma_010625.csv") # last saved on 01/06/2025
+```
+
+## Limma
+```{r message = FALSE, warning = FALSE}
+# add unique row_ids again so that we can match with limma results later on
+df_for_limma <- df_for_limma %>% 
+                  dplyr::mutate(row_id = paste0("row_", 1:nrow(.)))
+
+limma_df <- df_for_limma %>% 
+              dplyr::select(row_id, matches("ra_normalized|hc_normalized"))
+limma_mat <- as.matrix(limma_df[-1])
+
+rownames(limma_mat) <- df_for_limma$row_id
+
+# make design matrix
+group <- c("ra", "ra", "ra", "hc", "hc", "hc")
+group <- factor(group, levels = c("hc", "ra"))
+
+design <- model.matrix(~group)
+colnames(design) <- c("mean_hc", "ra_v_hc")
+
+fit <- limma::lmFit(limma_mat, design)
+efit <- limma::eBayes(fit)
+limma_results <- topTable(efit, coef = 2, number = nrow(limma_mat)) %>% 
+                      tibble::rownames_to_column("row_id") %>% 
+                      dplyr::mutate(logFC = 2^logFC) %>% # anti-log for KSEA
+                      dplyr::rename(ra_v_hc_fc = logFC,
+                                    ra_v_hc_padj = adj.P.Val) %>% 
+                      dplyr::select(row_id, ra_v_hc_fc, ra_v_hc_padj)
+
+# combine dataframes and prep for KSEA
+ksea_input <- df_for_limma %>% 
+  dplyr::select(row_id, Protein, Peptide, Gene, Residue.Both, modifications) %>% 
+  dplyr::inner_join(limma_results, join_by(row_id)) %>% 
+  dplyr::select(-row_id) %>% 
+  dplyr::rename(FC = ra_v_hc_fc,
+                p = ra_v_hc_padj,
+                Modifications = modifications) %>% 
+  dplyr::select(Protein, Gene, Peptide, Residue.Both, Modifications, p, FC)
+
+ksea_input %>% 
+  dplyr::arrange(p) %>% 
+  dplyr::slice_head(n = 10) %>% 
+  kbl(caption = "Limma Output (RA vs HC) - top 10 most significant differences") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+# save results
+#write_csv(ksea_input, "results/ksea_input_liberal_010625.csv") # last saved on 01/06/2024
+```
+
+## KSEA
+```{r message = FALSE, warning = FALSE}
+# looking at data set from PSP
+# downloaded https://www.phosphosite.org/staticDownloads on 04/14/2024
+psp_df <- read_delim("data/Kinase_Substrate_Dataset", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE, skip = 2)
+
+psp_df_clean <- psp_df %>% 
+  dplyr::select(KINASE, KIN_ACC_ID, GENE, KIN_ORGANISM, SUBSTRATE, SUB_GENE_ID, SUB_ACC_ID, SUB_GENE, SUB_ORGANISM, SUB_MOD_RSD, SITE_GRP_ID, `SITE_+/-7_AA`) %>% 
+  dplyr::rename(`SITE_...7_AA` = `SITE_+/-7_AA`) %>% 
+  dplyr::mutate(networkin_score = "Inf",
+                Source = "PhosphoSitePlus")
+
+# What to do when KIN_ORGANISM and SUB_ORGANISM are different??
+# Do what they did in this paper - https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1007578
+
+psp_df_clean_human <- psp_df_clean %>% 
+                        dplyr::filter(KIN_ORGANISM == "human" & SUB_ORGANISM == "human")
+
+KSEA.Barplot(KSData = psp_df_clean_human, 
+             PX  = ksea_input[ , c(1:4, 6:7)], # dropping Modifications column
+             NetworKIN = FALSE, 
+             NetworKIN.cutoff, 
+             m.cutoff = 3, 
+             p.cutoff = 0.05,
+             export = FALSE)
+
+KSEA.Scores(
+             KSData = psp_df_clean_human, 
+             PX  = ksea_input[ , c(1:4, 6:7)], # dropping Modifications column 
+             NetworKIN = FALSE, 
+             NetworKIN.cutoff
+) %>% data.frame() %>% 
+  dplyr::arrange(p.value) %>% 
+  dplyr::slice_head(n = 10) %>% 
+  kbl(caption = "KSEA Output (RA vs HC) - top 10 most significant differences") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+KSEA.Complete(psp_df_clean_human,
+              PX = ksea_input[ , c(1:4, 6:7)], # dropping Modifications column
+              NetworKIN = FALSE,
+              m.cutoff = 3,
+              p.cutoff = 0.1)
+
+# renamed all 3 results files to include "_liberal_010625" in their names and moved to results/ dir
+
+# last run on 01/06/2025
+
+# filter ksea_input so that you only have phosphopeptides that are in PhosphoSitePlus
+ksea_df <- read_csv("results/Kinase-Substrate Links_liberal_010625.csv")
+
+ksea_df_unique <- ksea_df %>% 
+                    dplyr::select(Substrate.Gene, Substrate.Mod) %>% 
+                    dplyr::distinct()
+limma_filter <- ksea_input %>% 
+  dplyr::inner_join(ksea_df_unique, join_by(Gene == Substrate.Gene,
+                                     Residue.Both == Substrate.Mod))
+
+#write_csv(limma_filter, "results/limma_results_in_psp_010625.csv")
+# last saved on 01/06/2025
+
+# create a version of ksea_input with a column that tells you if a given phosphopeptide is found in PSP
+psp_df_clean_human_sub <- psp_df_clean_human %>% 
+                            dplyr::select(SUB_GENE, SUB_MOD_RSD, Source)
+
+ksea_input_with_psp_info <- ksea_input %>% 
+  dplyr::left_join(psp_df_clean_human_sub,
+                   join_by(Gene == SUB_GENE,
+                           Residue.Both == SUB_MOD_RSD)) %>%
+  dplyr::mutate(found_in_psp = if_else(!is.na(Source),
+                                       "yes", "no")) %>%
+  dplyr::select(-Source)
+
+# write_csv(ksea_input_with_psp_info, "results/ksea_input_liberal_with_psp_info_010625.csv")
+# last saved on 01/06/2025
+
+# Add BH FDR-corrected p-values to kinase scores
+# KSEA_Kinase_Scores_liberal <- read_csv("results/KSEA Kinase Scores_liberal_010625.csv")
+# KSEA_Kinase_Scores_with_padj_liberal <- KSEA_Kinase_Scores_liberal %>%
+#                                           dplyr::mutate(p_adj = p.adjust(p.value, method = "fdr"))
+# write_csv(KSEA_Kinase_Scores_with_padj_liberal, "results/KSEA_Kinase_Scores_with_padj_liberal_010625.csv")
+# last saved on 01 06 2025
+```
+
+## Karamanis Plot
+```{r message = FALSE, warning = FALSE}
+ksea_df_ptm <- ksea_df %>% 
+                  tidyr::unite("PTM", Substrate.Gene:Substrate.Mod, sep = " ") 
+
+# What are the 6 most popular Kinases?
+top_kinases <- ksea_df_ptm %>% 
+  dplyr::count(Kinase.Gene) %>% 
+  dplyr::arrange(desc(n)) %>% 
+  dplyr::slice_head(n = 6) %>% 
+  dplyr::pull(Kinase.Gene)
+
+ksea_df_ptm %>% 
+  filter(Kinase.Gene %in% top_kinases) %>%
+  mutate(
+    colour = case_when(
+      Kinase.Gene == top_kinases[1] ~ "#FF2B4F",
+      Kinase.Gene == top_kinases[2] ~ "Red",
+      Kinase.Gene == top_kinases[3] ~ "#003399",
+      Kinase.Gene == top_kinases[4] ~ "#3686d3",
+      Kinase.Gene == top_kinases[5] ~ "#88398a",
+      Kinase.Gene == top_kinases[6] ~ "Pink"
+    )
+  ) %>% 
+  ggplot(aes(
+    x = 0,
+    y = fct_rev(factor(PTM)),
+    xend = Kinase.Gene,
+    yend = 1,
+    colour = colour
+  )) +
+  geom_curve(curvature = -0.4) + # ?geom_curve
+  scale_x_discrete() + # ?scale_x_discrete
+  scale_y_discrete() +
+  scale_color_identity() + # ?scale_color_identity
+  theme_minimal() +
+  labs(x = "Kinase",
+       y = "Substrate",
+       title = "Kinase-Substrate plot for RA vs HC") +
+  theme(
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "#F0EFF1", colour = "#F0EFF1"),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 40, hjust = 1, face = "bold", margin = margin(t = -3, r = 0, b = 0, l = 0)),
+    axis.text.y = element_text(size = 6, face = "bold"),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold"),
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(vjust = 2)
+  ) 
+```
