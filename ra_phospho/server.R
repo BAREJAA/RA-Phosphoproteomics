@@ -363,13 +363,12 @@ function(input, output, session) {
     output$ksea_scores_table <- DT::renderDataTable({
       datatable(
         KSEA_Kinase_Scores_with_padj_liberal %>% 
-          dplyr::select(-log2FC) %>% # why is this here?? It contains the same data as mS!!!
+          dplyr::select(-c(log2FC, p_adj)) %>%
           dplyr::mutate(
             mS = round(mS, 3),
             Enrichment = round(Enrichment, 3),
             z.score = round(z.score, 3),
-            p.value = round(p.value, 3),
-            p_adj = round(p_adj, 3)
+            p.value = round(p.value, 3)
           ),
         filter = 'top', 
         options = list(
@@ -377,7 +376,7 @@ function(input, output, session) {
         ),
         caption = htmltools::tags$caption(
           style = 'caption-side: bottom; text-align: left;',
-          "Kinase.Gene = The gene name for each predicted kinase; mS = log2-transformed mean fold-change of the kinases's substrates; Enrichment = Background-adjusted value of the kinase's mS; z.score = Normalized score for each kinase; p.value = p-value computed for each z-score; p_adj = FDR-corrected p-value"
+          "Kinase.Gene = The gene name for each predicted kinase; mS = log2-transformed mean fold-change of the kinases's substrates; Enrichment = Background-adjusted value of the kinase's mS; z.score = Normalized score for each kinase; p.value = p-value computed for each z-score"
         )
       )
     })
