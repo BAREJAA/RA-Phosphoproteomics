@@ -1,60 +1,60 @@
 # Main login screen
-loginpage <- div(id = "loginpage", style = "width: 500px; max-width: 100%; margin: 0 auto; padding: 20px;",
-                 wellPanel(
-                   tags$h2("LOG IN", class = "text-center", style = "padding-top: 0;color:#333; font-weight:600;"),
-                   textInput("userName", placeholder="Username", label = tagList(icon("user"), "Username")),
-                   passwordInput("passwd", placeholder="Password", label = tagList(icon("unlock-alt"), "Password")),
-                   br(),
-                   div(
-                     style = "text-align: center;",
-                     actionButton("login", "SIGN IN", style = "color: white; background-color:#3c8dbc;
-                                 padding: 10px 15px; width: 150px; cursor: pointer;
-                                 font-size: 18px; font-weight: 600;"),
-                     shinyjs::hidden(
-                       div(id = "nomatch",
-                           tags$p("Oops! Incorrect username or password!",
-                                  style = "color: red; font-weight: 600;
-                                            padding-top: 5px;font-size:16px;",
-                                  class = "text-center")))
-                   ))
-)
-
-credentials = data.frame(
-  username_id = c("huffmanlab", "huffmanlab_alt"),
-  password   = sapply(c("huffman7276810", "huffman7276810_alt"), sodium::password_store),
-  permission  = c("basic", "advanced"),
-  stringsAsFactors = F
-)
+# loginpage <- div(id = "loginpage", style = "width: 500px; max-width: 100%; margin: 0 auto; padding: 20px;",
+#                  wellPanel(
+#                    tags$h2("LOG IN", class = "text-center", style = "padding-top: 0;color:#333; font-weight:600;"),
+#                    textInput("userName", placeholder="Username", label = tagList(icon("user"), "Username")),
+#                    passwordInput("passwd", placeholder="Password", label = tagList(icon("unlock-alt"), "Password")),
+#                    br(),
+#                    div(
+#                      style = "text-align: center;",
+#                      actionButton("login", "SIGN IN", style = "color: white; background-color:#3c8dbc;
+#                                  padding: 10px 15px; width: 150px; cursor: pointer;
+#                                  font-size: 18px; font-weight: 600;"),
+#                      shinyjs::hidden(
+#                        div(id = "nomatch",
+#                            tags$p("Oops! Incorrect username or password!",
+#                                   style = "color: red; font-weight: 600;
+#                                             padding-top: 5px;font-size:16px;",
+#                                   class = "text-center")))
+#                    ))
+# )
+#
+# credentials = data.frame(
+#   username_id = c("huffmanlab", "huffmanlab_alt"),
+#   password   = sapply(c("huffman7276810", "huffman7276810_alt"), sodium::password_store),
+#   permission  = c("basic", "advanced"),
+#   stringsAsFactors = F
+# )
 
 function(input, output, session) {
 
   # https://www.listendata.com/2019/06/how-to-add-login-page-in-shiny-r.html
-  login = FALSE
-  USER <- reactiveValues(login = login)
+  # login = FALSE
+  # USER <- reactiveValues(login = login)
 
-  observe({
-    if (USER$login == FALSE) {
-      if (!is.null(input$login)) {
-        if (input$login > 0) {
-          Username <- isolate(input$userName)
-          Password <- isolate(input$passwd)
-          if(length(which(credentials$username_id==Username))==1) {
-            pasmatch  <- credentials["password"][which(credentials$username_id==Username),]
-            pasverify <- sodium::password_verify(pasmatch, Password)
-            if(pasverify) {
-              USER$login <- TRUE
-            } else {
-              shinyjs::toggle(id = "nomatch", anim = TRUE, time = 1, animType = "fade")
-              shinyjs::delay(3000, shinyjs::toggle(id = "nomatch", anim = TRUE, time = 1, animType = "fade"))
-            }
-          } else {
-            shinyjs::toggle(id = "nomatch", anim = TRUE, time = 1, animType = "fade")
-            shinyjs::delay(3000, shinyjs::toggle(id = "nomatch", anim = TRUE, time = 1, animType = "fade"))
-          }
-        }
-      }
-    }
-  })
+  # observe({
+  #   if (USER$login == FALSE) {
+  #     if (!is.null(input$login)) {
+  #       if (input$login > 0) {
+  #         Username <- isolate(input$userName)
+  #         Password <- isolate(input$passwd)
+  #         if(length(which(credentials$username_id==Username))==1) {
+  #           pasmatch  <- credentials["password"][which(credentials$username_id==Username),]
+  #           pasverify <- sodium::password_verify(pasmatch, Password)
+  #           if(pasverify) {
+  #             USER$login <- TRUE
+  #           } else {
+  #             shinyjs::toggle(id = "nomatch", anim = TRUE, time = 1, animType = "fade")
+  #             shinyjs::delay(3000, shinyjs::toggle(id = "nomatch", anim = TRUE, time = 1, animType = "fade"))
+  #           }
+  #         } else {
+  #           shinyjs::toggle(id = "nomatch", anim = TRUE, time = 1, animType = "fade")
+  #           shinyjs::delay(3000, shinyjs::toggle(id = "nomatch", anim = TRUE, time = 1, animType = "fade"))
+  #         }
+  #       }
+  #     }
+  #   }
+  # })
 
   # output$logoutbtn <- renderUI({
   #   req(USER$login)
@@ -66,7 +66,7 @@ function(input, output, session) {
   # })
 
   output$sidebarpanel <- renderUI({
-    if (USER$login == TRUE ){
+    # if (USER$login == TRUE ){
       sidebarMenu(
         menuItem("Phosphoproteomics data",
                  tabName = "phospho",
@@ -75,11 +75,11 @@ function(input, output, session) {
                  icon = icon("chart-bar"),
                  tabName = "ksea")
       )
-    }
+    # }
   })
 
   output$body <- renderUI({
-    if (USER$login == TRUE ) {
+    # if (USER$login == TRUE ) {
       tabItems(
 
         tabItem(tabName = "phospho",
@@ -237,10 +237,10 @@ function(input, output, session) {
         )
       )
 
-    }
-    else {
-      loginpage
-    }
+    # }
+    # else {
+    #   loginpage
+    # }
   })
     # create reactives
     phosphosites <- reactive({
