@@ -1,6 +1,6 @@
 # RA-Phosphoproteomics
 
-This repository contains code for the analyses and app associated with the paper "Phosphoproteomics modifications in women with rheumatoid arthritis—application of web-based software to enhance data visualization". 
+This repository contains code for the analyses and app associated with the paper ["Phosphoproteomics modifications in women with rheumatoid arthritis—application of web-based software to enhance data visualization"](https://pubs.acs.org/doi/full/10.1021/acs.jproteome.5c00140) published in the Journal of Proteome Research. 
 
 ---
 
